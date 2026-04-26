@@ -1,28 +1,31 @@
 package com.example.demo.Dto;
 
-import org.springframework.format.annotation.DateTimeFormat;
-import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 public class TransactionRequest {
-    private UUID adminWalletId;
+
+    private UUID senderWalletId;
+    private UUID receiverWalletId;
     private UUID userWalletId;
-    private double amount;
+    private BigDecimal amount;
     private String transactionType;
     private String status;
 
-
-    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-    private LocalDate date;
-
-    // Getters and Setters
-
-    public UUID getAdminWalletId() {
-        return adminWalletId;
+    public UUID getSenderWalletId() {
+        return senderWalletId;
     }
 
-    public void setAdminWalletId(UUID adminWalletId) {
-        this.adminWalletId = adminWalletId;
+    public void setSenderWalletId(UUID senderWalletId) {
+        this.senderWalletId = senderWalletId;
+    }
+
+    public UUID getReceiverWalletId() {
+        return receiverWalletId;
+    }
+
+    public void setReceiverWalletId(UUID receiverWalletId) {
+        this.receiverWalletId = receiverWalletId;
     }
 
     public UUID getUserWalletId() {
@@ -33,13 +36,16 @@ public class TransactionRequest {
         this.userWalletId = userWalletId;
     }
 
-    public double getAmount() {
+    public BigDecimal getAmount() {
         return amount;
     }
 
-    public void setAmount(double amount) {
+
+
+    public void setAmount(BigDecimal amount) {
         this.amount = amount;
     }
+
 
     public String getTransactionType() {
         return transactionType;
@@ -56,13 +62,4 @@ public class TransactionRequest {
     public void setStatus(String status) {
         this.status = status;
     }
-
-    public LocalDate getDate() {
-        return date;
-    }
-
-    public void setDate(LocalDate date) {
-        this.date = date;
-    }
-
 }

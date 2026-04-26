@@ -1,9 +1,7 @@
 package com.example.demo.service;
 
-import com.example.demo.Dto.OtpResponse;
 import com.example.demo.Dto.TransactionRequest;
 import com.example.demo.models.*;
-import com.example.demo.repository.ExchangeRepository;
 import com.example.demo.repository.FriendsRepository;
 import com.example.demo.repository.TransactionRepository;
 import com.example.demo.repository.UserRepository;
@@ -14,7 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.sql.Date;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
@@ -29,9 +27,7 @@ public class TransactionService {
     private final UserRepository userRepository;
     private final FriendsRepository friendsRepository;
     private final JwtUtil jwtUtil;
-    private final OtpService otpService;
     private final ExchangeService exchangeService;
-    private final ExchangeRepository exchangeRepository;
     private final NotificationService notificationService;
 
     public TransactionService(TransactionRepository transactionRepository,
@@ -39,83 +35,102 @@ public class TransactionService {
                               UserRepository userRepository,
                               FriendsRepository friendsRepository,
                               JwtUtil jwtUtil,
-                              OtpService otpService,
                               NotificationService notificationService,
-                              ExchangeService exchangeService,
-                              ExchangeRepository exchangeRepository) {
+                              ExchangeService exchangeService) {
         this.transactionRepository = transactionRepository;
         this.walletRepository = walletRepository;
         this.userRepository = userRepository;
         this.friendsRepository = friendsRepository;
         this.jwtUtil = jwtUtil;
-        this.otpService = otpService;
         this.notificationService = notificationService;
         this.exchangeService = exchangeService;
-        this.exchangeRepository = exchangeRepository;
     }
 
     @Transactional
-    public Transaction transfer(UUID senderWalletId, UUID receiverWalletId, Double amountTransferred) {
+    public Transaction transfer(String token, UUID senderWalletId, UUID receiverWalletId, BigDecimal amountTransferred) {
         logger.info("Processing transfer - Sender wallet: {}, Receiver wallet: {}, Amount: {}",
                 senderWalletId, receiverWalletId, amountTransferred);
 
-        if (amountTransferred == null || amountTransferred <= 0) {
-            throw new IllegalArgumentException("Amount must be greater than zero.");
-        }
+        validateAmount(amountTransferred);
+
+        String email = jwtUtil.extractEmail(token);
+
+        User loggedInUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Authenticated user not found."));
 
         Wallet senderWallet = walletRepository.findById(senderWalletId)
-                .orElseThrow(() -> new IllegalArgumentException("Sender wallet not found"));
+                .orElseThrow(() -> new RuntimeException("Sender wallet not found."));
 
         Wallet receiverWallet = walletRepository.findById(receiverWalletId)
-                .orElseThrow(() -> new IllegalArgumentException("Receiver wallet not found"));
+                .orElseThrow(() -> new RuntimeException("Receiver wallet not found."));
+
+        if (!senderWallet.getUser().getId().equals(loggedInUser.getId())) {
+            throw new RuntimeException("Unauthorized: You can only transfer money from your own wallet.");
+        }
+
+        if (!Boolean.TRUE.equals(senderWallet.getIsActive())) {
+            throw new RuntimeException("Sender wallet is inactive.");
+        }
+
+        if (!Boolean.TRUE.equals(receiverWallet.getIsActive())) {
+            throw new RuntimeException("Receiver wallet is inactive.");
+        }
+
+        if (senderWallet.getId().equals(receiverWallet.getId())) {
+            throw new RuntimeException("You cannot transfer money to the same wallet.");
+        }
 
         User sender = senderWallet.getUser();
         User receiver = receiverWallet.getUser();
 
         if (sender == null || receiver == null) {
-            throw new IllegalArgumentException("User associated with wallet not found.");
+            throw new RuntimeException("Wallet user not found.");
         }
 
-        if (senderWallet.getBalance() < amountTransferred) {
-            throw new IllegalArgumentException("Insufficient funds.");
+        if (senderWallet.getBalance().compareTo(amountTransferred) < 0) {
+            throw new RuntimeException("Insufficient funds.");
         }
 
         if (!isValidTransfer(sender, receiver)) {
-            throw new IllegalArgumentException("You must be friends.");
+            throw new RuntimeException("You must be friends to transfer money.");
         }
 
-        double exchangeRateValue = exchangeService.getLatestRate(
-                senderWallet.getCurrency(),
-                receiverWallet.getCurrency()
+        BigDecimal exchangeRateValue = BigDecimal.valueOf(
+                exchangeService.getLatestRate(senderWallet.getCurrency(), receiverWallet.getCurrency())
         );
 
-        senderWallet.setBalance(senderWallet.getBalance() - amountTransferred);
+        BigDecimal convertedAmount = amountTransferred.multiply(exchangeRateValue);
 
-        double convertedAmount = amountTransferred * exchangeRateValue;
-        receiverWallet.setBalance(receiverWallet.getBalance() + convertedAmount);
+        // sender wallet audit fields
+        senderWallet.setPreviousBalance(senderWallet.getBalance());
+        senderWallet.setTransactionAmount(amountTransferred);
+
+        // receiver wallet audit fields
+        receiverWallet.setPreviousBalance(receiverWallet.getBalance());
+        receiverWallet.setTransactionAmount(convertedAmount);
+
+        senderWallet.setBalance(senderWallet.getBalance().subtract(amountTransferred));
+        receiverWallet.setBalance(receiverWallet.getBalance().add(convertedAmount));
 
         walletRepository.save(senderWallet);
         walletRepository.save(receiverWallet);
 
-        Exchange exchangeRate = exchangeRepository.findByFromCurrencyAndToCurrency(
-                senderWallet.getCurrency(),
-                receiverWallet.getCurrency()
-        ).orElseThrow(() -> new RuntimeException("Exchange rate not found"));
-
         Transaction transaction = new Transaction();
-        transaction.setWalletIn(receiverWallet);
         transaction.setWalletOut(senderWallet);
+        transaction.setWalletIn(receiverWallet);
         transaction.setTransactionId(UUID.randomUUID());
         transaction.setTransactionType(TransactionType.TRANSFER);
-        transaction.setAmount_transferred(amountTransferred);
-        transaction.setStatus(TransactionStatus.PENDING);
-        transaction.setDate(Date.valueOf(LocalDate.now()).toLocalDate());
+        transaction.setAmountTransferred(amountTransferred);
+        transaction.setExchangeRate(exchangeRateValue);
+        transaction.setStatus(TransactionStatus.COMPLETED);
+        transaction.setDate(LocalDate.now());
 
         Transaction savedTransaction = transactionRepository.save(transaction);
 
         String receiverMessage = String.format(
-                "You received %.2f from %s",
-                convertedAmount,
+                "You received %s %s from %s",
+                convertedAmount.toPlainString(),
+                receiverWallet.getCurrency().getName(),
                 sender.getEmail()
         );
 
@@ -126,8 +141,9 @@ public class TransactionService {
         );
 
         String senderMessage = String.format(
-                "You sent %.2f to %s",
-                amountTransferred,
+                "You sent %s %s to %s",
+                amountTransferred.toPlainString(),
+                senderWallet.getCurrency().getName(),
                 receiver.getEmail()
         );
 
@@ -137,34 +153,133 @@ public class TransactionService {
                 NotificationType.TRANSACTION_SENT
         );
 
-        logger.info("Transaction successful - ID: {}, Amount: {}, Status: {}, Date: {}",
-                savedTransaction.getTransactionId(),
-                savedTransaction.getAmount_transferred(),
-                savedTransaction.getStatus(),
-                savedTransaction.getDate());
-
-        logger.info("Notifications created for sender {} and receiver {}",
-                sender.getEmail(), receiver.getEmail());
+        logger.info("Transfer completed successfully. Transaction ID: {}", savedTransaction.getTransactionId());
 
         return savedTransaction;
     }
 
-    private boolean isValidTransfer(User sender, User receiver) {
-        List<Friends> friendships1 = friendsRepository.findByReceiverIdAndStatus(
-                receiver.getId(),
-                Friends.Status.ACCEPTED
-        );
-        boolean senderToReceiver = friendships1.stream()
-                .anyMatch(f -> f.getSenderId().equals(sender.getId()));
+    @Transactional
+    public Transaction deposit(UUID userWalletId, BigDecimal amount, String token) {
+        logger.info("Processing deposit - User wallet: {}, Amount: {}", userWalletId, amount);
 
-        List<Friends> friendships2 = friendsRepository.findByReceiverIdAndStatus(
-                sender.getId(),
-                Friends.Status.ACCEPTED
-        );
-        boolean receiverToSender = friendships2.stream()
-                .anyMatch(f -> f.getSenderId().equals(receiver.getId()));
+        validateAmount(amount);
 
-        return senderToReceiver || receiverToSender;
+        String email = jwtUtil.extractEmail(token);
+
+        User loggedInUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Authenticated user not found."));
+
+        Wallet userWallet = walletRepository.findById(userWalletId)
+                .orElseThrow(() -> new RuntimeException("User wallet not found."));
+
+        if (!Boolean.TRUE.equals(userWallet.getIsActive())) {
+            throw new RuntimeException("User wallet is inactive.");
+        }
+
+        boolean isAdmin = loggedInUser.getRole() != null
+                && "ADMIN".equalsIgnoreCase(loggedInUser.getRole().getName());
+
+        if (!isAdmin && !userWallet.getUser().getId().equals(loggedInUser.getId())) {
+            throw new RuntimeException("Unauthorized: You can only deposit into your own wallet.");
+        }
+
+        userWallet.setPreviousBalance(userWallet.getBalance());
+        userWallet.setTransactionAmount(amount);
+        userWallet.setBalance(userWallet.getBalance().add(amount));
+
+        walletRepository.save(userWallet);
+
+        Transaction transaction = new Transaction();
+        transaction.setWalletOut(null);
+        transaction.setWalletIn(userWallet);
+        transaction.setTransactionId(UUID.randomUUID());
+        transaction.setTransactionType(TransactionType.DEPOSIT);
+        transaction.setAmountTransferred(amount);
+        transaction.setExchangeRate(BigDecimal.ONE);
+        transaction.setStatus(TransactionStatus.COMPLETED);
+        transaction.setDate(LocalDate.now());
+
+        Transaction savedTransaction = transactionRepository.save(transaction);
+
+        String notificationMessage = String.format(
+                "A deposit of %s %s was added to your wallet",
+                amount.toPlainString(),
+                userWallet.getCurrency().getName()
+        );
+
+        notificationService.createNotification(
+                userWallet.getUser(),
+                notificationMessage,
+                NotificationType.BALANCE_ADDED
+        );
+
+        logger.info("Deposit completed successfully. Transaction ID: {}", savedTransaction.getTransactionId());
+
+        return savedTransaction;
+    }
+
+    @Transactional
+    public Transaction withdraw(UUID userWalletId, BigDecimal amount, String token) {
+        logger.info("Processing withdraw - User wallet: {}, Amount: {}", userWalletId, amount);
+
+        validateAmount(amount);
+
+        String email = jwtUtil.extractEmail(token);
+
+        User loggedInUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Authenticated user not found."));
+
+        Wallet userWallet = walletRepository.findById(userWalletId)
+                .orElseThrow(() -> new RuntimeException("User wallet not found."));
+
+        if (!Boolean.TRUE.equals(userWallet.getIsActive())) {
+            throw new RuntimeException("User wallet is inactive.");
+        }
+
+        boolean isAdmin = loggedInUser.getRole() != null
+                && "ADMIN".equalsIgnoreCase(loggedInUser.getRole().getName());
+
+        if (!isAdmin && !userWallet.getUser().getId().equals(loggedInUser.getId())) {
+            throw new RuntimeException("Unauthorized: You can only withdraw from your own wallet.");
+        }
+
+        if (userWallet.getBalance().compareTo(amount) < 0) {
+            throw new RuntimeException("Insufficient funds in user wallet.");
+        }
+
+        userWallet.setPreviousBalance(userWallet.getBalance());
+        userWallet.setTransactionAmount(amount);
+        userWallet.setBalance(userWallet.getBalance().subtract(amount));
+
+        walletRepository.save(userWallet);
+
+        Transaction transaction = new Transaction();
+        transaction.setWalletOut(userWallet);
+        transaction.setWalletIn(null);
+        transaction.setTransactionId(UUID.randomUUID());
+        transaction.setTransactionType(TransactionType.WITHDRAW);
+        transaction.setAmountTransferred(amount);
+        transaction.setExchangeRate(BigDecimal.ONE);
+        transaction.setStatus(TransactionStatus.COMPLETED);
+        transaction.setDate(LocalDate.now());
+
+        Transaction savedTransaction = transactionRepository.save(transaction);
+
+        String notificationMessage = String.format(
+                "A withdrawal of %s %s was made from your wallet",
+                amount.toPlainString(),
+                userWallet.getCurrency().getName()
+        );
+
+        notificationService.createNotification(
+                userWallet.getUser(),
+                notificationMessage,
+                NotificationType.WITHDRAWAL
+        );
+
+        logger.info("Withdraw completed successfully. Transaction ID: {}", savedTransaction.getTransactionId());
+
+        return savedTransaction;
     }
 
     public List<Transaction> getTransactions(String token, TransactionRequest request) {
@@ -180,138 +295,29 @@ public class TransactionService {
         );
     }
 
-    @Transactional
-    public void deposit(UUID adminWalletId, UUID userWalletId, double amount, String token) {
-        String email = jwtUtil.extractEmail(token);
-
-        User adminUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Admin user not found"));
-
-        if (!adminUser.getRole().getName().equals("ADMIN")) {
-            throw new RuntimeException("Unauthorized: Only ADMIN users can perform transactions.");
+    private void validateAmount(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Amount must be greater than zero.");
         }
-
-        Wallet adminWallet = walletRepository.findById(adminWalletId)
-                .orElseThrow(() -> new RuntimeException("Admin wallet not found"));
-
-        if (!adminWallet.getUser().getId().equals(adminUser.getId())) {
-            throw new RuntimeException("Unauthorized: Wallet does not belong to the logged-in admin.");
-        }
-
-        Wallet userWallet = walletRepository.findById(userWalletId)
-                .orElseThrow(() -> new RuntimeException("User wallet not found"));
-
-        double prevAdminBalance = adminWallet.getBalance();
-        double prevUserBalance = userWallet.getBalance();
-
-        userWallet.setPreviousBalance(prevUserBalance);
-        userWallet.setTransactionAmount(amount);
-
-        adminWallet.setBalance(prevAdminBalance - amount);
-        userWallet.setBalance(prevUserBalance + amount);
-
-        walletRepository.save(adminWallet);
-        walletRepository.save(userWallet);
-
-        String logMessage = String.format(
-                "Deposit successful! Admin (Wallet ID: %s): Previous Balance: %.2f, New Balance: %.2f | User (Wallet ID: %s): Previous Balance: %.2f, New Balance: %.2f",
-                adminWalletId, prevAdminBalance, adminWallet.getBalance(),
-                userWalletId, prevUserBalance, userWallet.getBalance()
-        );
-
-        logger.info(logMessage);
-
-        Transaction transaction = new Transaction();
-        transaction.setWalletIn(adminWallet);
-        transaction.setWalletOut(userWallet);
-        transaction.setAmount_transferred(amount);
-        transaction.setType(TransactionType.DEPOSIT);
-        transaction.setDate(Date.valueOf(LocalDate.now()).toLocalDate());
-        transaction.setStatus(TransactionStatus.COMPLETED);
-
-        transactionRepository.save(transaction);
-
-        String notificationMessage = String.format(
-                "%s deposited %.2f into your wallet",
-                adminUser.getEmail(),
-                amount
-        );
-
-        notificationService.createNotification(
-                userWallet.getUser(),
-                notificationMessage,
-                NotificationType.BALANCE_ADDED
-        );
     }
 
-    @Transactional
-    public void withdraw(UUID adminWalletId, UUID userWalletId, double amount, String token) {
-        String email = jwtUtil.extractEmail(token);
-
-        User adminUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Admin user not found"));
-
-        if (!adminUser.getRole().getName().equals("ADMIN")) {
-            throw new RuntimeException("Unauthorized: Only ADMIN users can perform transactions.");
-        }
-
-        Wallet adminWallet = walletRepository.findById(adminWalletId)
-                .orElseThrow(() -> new RuntimeException("Admin wallet not found"));
-
-        if (!adminWallet.getUser().getId().equals(adminUser.getId())) {
-            throw new RuntimeException("Unauthorized: Wallet does not belong to the logged-in admin.");
-        }
-
-        Wallet userWallet = walletRepository.findById(userWalletId)
-                .orElseThrow(() -> new RuntimeException("User wallet not found"));
-
-        double prevUserBalance = userWallet.getBalance();
-
-        userWallet.setPreviousBalance(prevUserBalance);
-        userWallet.setTransactionAmount(-amount);
-
-        if (prevUserBalance < amount) {
-            throw new RuntimeException("Insufficient funds in user wallet.");
-        }
-
-        userWallet.setBalance(prevUserBalance - amount);
-        walletRepository.save(userWallet);
-
-        String logMessage = String.format(
-                "Withdrawal successful! User (Wallet ID: %s): Previous Balance: %.2f, New Balance: %.2f",
-                userWalletId, prevUserBalance, userWallet.getBalance()
+    private boolean isValidTransfer(User sender, User receiver) {
+        List<Friends> friendships1 = friendsRepository.findByReceiverIdAndStatus(
+                receiver.getId(),
+                Friends.Status.ACCEPTED
         );
 
-        logger.info(logMessage);
+        boolean senderToReceiver = friendships1.stream()
+                .anyMatch(f -> f.getSenderId().equals(sender.getId()));
 
-        Transaction transaction = new Transaction();
-        transaction.setWalletIn(adminWallet);
-        transaction.setWalletOut(userWallet);
-        transaction.setAmount_transferred(amount);
-        transaction.setType(TransactionType.WITHDRAW);
-        transaction.setDate(Date.valueOf(LocalDate.now()).toLocalDate());
-        transaction.setStatus(TransactionStatus.COMPLETED);
-
-        transactionRepository.save(transaction);
-
-        String notificationMessage = String.format(
-                "%s withdrew %.2f from your wallet",
-                adminUser.getEmail(),
-                amount
+        List<Friends> friendships2 = friendsRepository.findByReceiverIdAndStatus(
+                sender.getId(),
+                Friends.Status.ACCEPTED
         );
 
-        notificationService.createNotification(
-                userWallet.getUser(),
-                notificationMessage,
-                NotificationType.WITHDRAWAL
-        );
-    }
+        boolean receiverToSender = friendships2.stream()
+                .anyMatch(f -> f.getSenderId().equals(receiver.getId()));
 
-    public OtpResponse verifyOtp(String email, String otp, UUID transactionId) {
-        if (!otpService.validateOtp(email, otp)) {
-            throw new RuntimeException("Invalid or expired OTP");
-        }
-
-        return new OtpResponse(email, otp, transactionId);
+        return senderToReceiver || receiverToSender;
     }
 }

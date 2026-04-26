@@ -1,8 +1,9 @@
 package com.example.demo.models;
 
 import jakarta.persistence.*;
+
+import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -10,58 +11,71 @@ import java.util.UUID;
 public class Transaction {
 
     @Id
-    @GeneratedValue
-    private UUID id; // Unique transaction ID
+    @GeneratedValue(strategy = GenerationType.UUID)
+    private UUID id;
 
     @ManyToOne
-    @JoinColumn(name = "wallet_in", referencedColumnName = "id", nullable = false) // Ensuring wallet_in cannot be NULL
-    private Wallet walletIn; // Associated Wallet receiving the money
+    @JoinColumn(name = "wallet_in", nullable = true)
+    private Wallet walletIn;
 
     @ManyToOne
-    @JoinColumn(name = "wallet_out", referencedColumnName = "id", nullable = false) // Ensuring wallet_out cannot be NULL
-    private Wallet walletOut; // Associated Wallet sending the money
+    @JoinColumn(name = "wallet_out", nullable = true)
+    private Wallet walletOut;
 
-    @Column(nullable = true, unique = true)
-    private UUID transactionId; // Another unique transaction identifier
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = true)
-    private TransactionType transactionType; // Type of transaction (kept only this field)
+    @Column(nullable = false, unique = true)
+    private UUID transactionId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private TransactionStatus status; // Transaction status (PENDING, COMPLETED, etc.)
+    private TransactionType transactionType;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Double amount_transferred;
+    private TransactionStatus status;
+
+    @Column(name = "amount_transferred", nullable = false, precision = 19, scale = 4)
+    private BigDecimal amountTransferred;
+
+    @Column(precision = 19, scale = 8)
+    private BigDecimal exchangeRate;
 
     @Column(name = "date", nullable = false)
     private LocalDate date;
 
-    // Getters and Setters
+    public UUID getId() {
+        return id;
+    }
+
+    public UUID getTransactionId() {
+        return transactionId;
+    }
 
     public void setTransactionId(UUID transactionId) {
         this.transactionId = transactionId;
     }
 
-    public void setTransactionType(TransactionType transactionType) {
-        this.transactionType = transactionType;
+    public Wallet getWalletIn() {
+        return walletIn;
     }
 
-    public void setAmount_transferred(Double amount_transferred) {
-        this.amount_transferred = amount_transferred;
+    public void setWalletIn(Wallet walletIn) {
+        this.walletIn = walletIn;
     }
 
-    public UUID getTransactionId() {
-        return this.transactionId;
+    public Wallet getWalletOut() {
+        return walletOut;
     }
 
-    public Double getAmount_transferred() {
-        return this.amount_transferred;
+    public void setWalletOut(Wallet walletOut) {
+        this.walletOut = walletOut;
     }
 
     public TransactionType getTransactionType() {
-        return this.transactionType;
+        return transactionType;
+    }
+
+    public void setTransactionType(TransactionType transactionType) {
+        this.transactionType = transactionType;
     }
 
     public TransactionStatus getStatus() {
@@ -72,6 +86,24 @@ public class Transaction {
         this.status = status;
     }
 
+    public BigDecimal getAmountTransferred() {
+        return amountTransferred;
+    }
+
+    public void setAmountTransferred(BigDecimal amountTransferred) {
+        this.amountTransferred = amountTransferred;
+    }
+
+
+
+    public BigDecimal getExchangeRate() {
+        return exchangeRate;
+    }
+
+    public void setExchangeRate(BigDecimal exchangeRate) {
+        this.exchangeRate = exchangeRate;
+    }
+
     public LocalDate getDate() {
         return date;
     }
@@ -79,26 +111,4 @@ public class Transaction {
     public void setDate(LocalDate date) {
         this.date = date;
     }
-
-    public Wallet getWalletIn() {
-        return walletIn;
-    }
-
-    public Wallet getWalletOut() {
-        return walletOut;
-    }
-
-    public void setWalletIn(Wallet walletIn) {
-        this.walletIn = walletIn;
-    }
-
-    public void setWalletOut(Wallet walletOut) {
-        this.walletOut = walletOut;
-    }
-
-    public void setType(TransactionType transactionType) {
-        this.transactionType = transactionType;
-    }
-
-
 }

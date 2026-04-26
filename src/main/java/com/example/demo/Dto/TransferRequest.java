@@ -1,11 +1,12 @@
 package com.example.demo.Dto;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 public class TransferRequest {
     private UUID senderWalletId;
     private UUID receiverWalletId;
-    private Double amountTransferred;
+    private BigDecimal amountTransferred;
 
     public UUID getSenderWalletId() {
         return senderWalletId;
@@ -15,7 +16,7 @@ public class TransferRequest {
         return receiverWalletId;
     }
 
-    public Double getAmountTransferred() {
+    public BigDecimal getAmountTransferred() {
         return amountTransferred;
     }
 }

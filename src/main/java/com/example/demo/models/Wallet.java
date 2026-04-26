@@ -3,7 +3,8 @@ package com.example.demo.models;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
-import org.hibernate.annotations.GenericGenerator;
+
+import java.math.BigDecimal;
 import java.util.UUID;
 
 @Entity
@@ -11,26 +12,19 @@ import java.util.UUID;
 public class Wallet {
 
     @Id
-    @GeneratedValue(generator = "UUID")
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @ManyToOne
-    @JoinColumn(name = "user_id")
-    @JsonManagedReference // Ensures User is serialized in Wallet response
+    @JoinColumn(name = "user_id", nullable = false)
+    @JsonManagedReference
     private User user;
 
-    @Column(nullable = false)
-    private Double balance;
-
-    // New columns to track balance changes
-    @Column(nullable = true)
-    private Double previousBalance;
-
-    @Column(nullable = true)
-    private Double transactionAmount;
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal balance;
 
     @ManyToOne
-    @JoinColumn(name = "currency_name", referencedColumnName = "id")
+    @JoinColumn(name = "currency_id", referencedColumnName = "id", nullable = false)
     private Currency currency;
 
     @Column(nullable = false)
@@ -40,7 +34,29 @@ public class Wallet {
     private String walletType;
 
 
-    @JsonProperty("id")
+    @Column(nullable = false)
+    private BigDecimal previousBalance;
+
+    @Column(nullable = false)
+    private BigDecimal transactionAmount;
+
+    public BigDecimal getPreviousBalance() {
+        return previousBalance;
+    }
+
+    public void setPreviousBalance(BigDecimal previousBalance) {
+        this.previousBalance = previousBalance;
+    }
+
+    public BigDecimal getTransactionAmount() {
+        return transactionAmount;
+    }
+
+    public void setTransactionAmount(BigDecimal transactionAmount) {
+        this.transactionAmount = transactionAmount;
+    }
+
+
     public UUID getId() {
         return id;
     }
@@ -49,7 +65,6 @@ public class Wallet {
         this.id = id;
     }
 
-    @JsonProperty("user")
     public User getUser() {
         return user;
     }
@@ -58,16 +73,14 @@ public class Wallet {
         this.user = user;
     }
 
-    @JsonProperty("balance")
-    public Double getBalance() {
+    public BigDecimal getBalance() {
         return balance;
     }
 
-    public void setBalance(Double balance) {
+    public void setBalance(BigDecimal balance) {
         this.balance = balance;
     }
 
-    @JsonProperty("currency")
     public Currency getCurrency() {
         return currency;
     }
@@ -76,16 +89,14 @@ public class Wallet {
         this.currency = currency;
     }
 
-    @JsonProperty("isActive")
     public Boolean getIsActive() {
         return isActive;
     }
 
-    public void setIsActive(Boolean isActive) {
-        this.isActive = isActive;
+    public void setIsActive(Boolean active) {
+        isActive = active;
     }
 
-    @JsonProperty("walletType")
     public String getWalletType() {
         return walletType;
     }
@@ -93,23 +104,4 @@ public class Wallet {
     public void setWalletType(String walletType) {
         this.walletType = walletType;
     }
-
-    @JsonProperty("previousBalance")
-    public Double getPreviousBalance() {
-        return previousBalance;
-    }
-
-    public void setPreviousBalance(Double previousBalance) {
-        this.previousBalance = previousBalance;
-    }
-
-    @JsonProperty("transactionAmount")
-    public Double getTransactionAmount() {
-        return transactionAmount;
-    }
-
-    public void setTransactionAmount(Double transactionAmount) {
-        this.transactionAmount = transactionAmount;
-    }
-
 }
